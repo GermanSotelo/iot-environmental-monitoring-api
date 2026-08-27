@@ -1,43 +1,51 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from datetime import datetime
+from fastapi import FastAPI, Depends
+from sqlalchemy.orm import Session
+from database import SessionLocal, SensorReading
 
 app = FastAPI()
 
-class SensorReading(BaseModel):
-    station_name: str
-    temperature: float
-    humidity: float
-
-readings = []
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 @app.post("/readings")
-def create_reading(reading: SensorReading):
-    new_reading = {
-        "id": len(readings) + 1,
-        "station_name": reading.station_name,
-        "temperature": reading.temperature,
-        "humidity": reading.humidity,
-        "timestamp": datetime.now()
-    }
-    readings.append(new_reading)
-    return new_reading
+def create_reading(station_name: str, temperature: float, humidity: float, db: Session = Depends(get_db)):
+    reading = SensorReading(station_name=station_name, temperature=temperature, humidity=humidity)
+    db.add(reading)
+    db.commit()
+    db.refresh(reading)
+    return reading
 
 @app.get("/readings")
-def get_readings():
-    return readings
+def get_readings(db: Session = Depends(get_db)):
+    return db.query(SensorReading).all()#es equivalentea SELECT * FROM readings
 
 @app.get("/readings/{id}")
-def get_reading(id: int):
-    for r in readings:
-        if r["id"] == id:
-            return r
+def get_reading(id: int, db: Session = Depends(get_db)):
+    return db.query(SensorReading).filter(SensorReading.id == id).first()#es equivalentea SELECT * FROM readings WHERE id = 1
+
+@app.put("/readings/{id}")
+def update_reading(id: int, station_name: str, temperature: float, humidity: float, db: Session = Depends(get_db)):
+    reading = db.query(SensorReading).filter(SensorReading.id == id).first()
+    if reading:
+        reading.station_name = station_name
+        reading.temperature = temperature
+        reading.humidity = humidity
+        db.commit()
+        db.refresh(reading)
+        return reading
     return {"error": "Not found"}
 
+
+
 @app.delete("/readings/{id}")
-def delete_reading(id: int):
-    for r in readings:
-        if r["id"] == id:
-            readings.remove(r)
-            return {"message": "Deleted"}
-    return {"error": "Not found"}
+def delete_reading(id: int,  db: Session = Depends(get_db)):
+    reading = db.query(SensorReading).filter(SensorReading.id == id).first()
+    if reading:
+        db.delete(reading)
+        db.commit()
+        return {"message": "Deleted"}
+    return {"error": "Not found"}   
