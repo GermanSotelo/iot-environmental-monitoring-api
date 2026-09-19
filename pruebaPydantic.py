@@ -1,7 +1,8 @@
 
-from fastapi import FastAPI, Query, Body, HTTPException
+from fastapi import FastAPI, Query, Body, HTTPException, Path
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
+from math import ceil
 
 app = FastAPI(title="Mini Blog")
 
@@ -9,6 +10,18 @@ BLOG_STATION = [
     {"id": 1, "station_name":"San Diego", "location":"California", "humidity":"90", "temperature":"24"},
     {"id": 2, "station_name":"Sandy", "location":"Utah", "humidity":"30", "temperature":"18"},
     {"id": 3, "station_name":"Raleighn", "location":"North Caroline", "humidity":"70", "temperature":"20"},
+    {"id": 4, "station_name":"Bogota", "location":"California", "humidity":"90", "temperature":"24"},
+    {"id": 5, "station_name":"Medellin", "location":"Utah", "humidity":"30", "temperature":"18"},
+    {"id": 6, "station_name":"Cali", "location":"North Caroline", "humidity":"70", "temperature":"20"},
+    {"id": 7, "station_name":"Madrid", "location":"California", "humidity":"90", "temperature":"24"},
+    {"id": 8, "station_name":"Barcelona", "location":"Utah", "humidity":"30", "temperature":"18"},
+    {"id": 9, "station_name":"Berlin", "location":"North Caroline", "humidity":"70", "temperature":"20"},
+    {"id": 10, "station_name":"Paris", "location":"California", "humidity":"90", "temperature":"24"},
+    {"id": 11, "station_name":"Rona", "location":"Utah", "humidity":"30", "temperature":"18"},
+    {"id": 12, "station_name":"Lisboa", "location":"North Caroline", "humidity":"70", "temperature":"20"},
+     {"id": 13, "station_name":"Paris", "location":"California", "humidity":"90", "temperature":"24"},
+    {"id": 14, "station_name":"Rona", "location":"Utah", "humidity":"30", "temperature":"18"},
+    {"id": 15, "station_name":"Lisboa", "location":"North Caroline", "humidity":"70", "temperature":"20"},
     
 ]
 
@@ -24,7 +37,7 @@ class Station(BaseModel):
     location:str
     humidity: float
     temperature: float
-    tags: Optional[List[Tag]] = []
+    tags: Optional[List[Tag]] = Field (default_factory=list)
     fecha: Optional[Fecha] = None
     
 
@@ -40,7 +53,7 @@ class StationCreate(Station):
     location:str
     humidity: float
     temperature: float
-    tags: Optional[List[Tag]] = []
+    tags: Optional[List[Tag]] = Field (default_factory=list)
     fecha: Optional[Fecha] = None
 
     @field_validator("station_name")
@@ -51,7 +64,7 @@ class StationCreate(Station):
         return value
 
 class StationUpdate(BaseModel):
-    station_name: str
+    station_name: Optional[str]=Field(None, min_length=3, max_length=100)
     location:Optional[str]=None
     humidity: float
     temperature: float
@@ -67,23 +80,104 @@ class StationSummary (BaseModel):
     humidity: float
     temperature: float
 
+class PaginatedPost(BaseModel): #esta clase la usamos para usar paginacion una forma util de evitar que devolavamos demasiada informacion innecesaria y poner el servidor demasiado lento
+    
+    page: int
+    per_page: int
+    total: int
+    total_pages: int
+    has_prev: bool
+    has_next: bool
+    order_by: Literal["id", "title"]
+    direction: Literal["asc", "desc"]
+    search: Optional[str] = None
+    items: List[StationPublic]  
+
 @app.get("/")
 def home():
     return {'message': 'Bienvenidos a Mini Blog por Devtalles'}
 
 
-@app.get("/station", response_model=List[StationPublic])
-def list_posts(query: str | None = Query(default=None, description="Texto para buscar por título")):
+@app.get("/station", response_model=PaginatedPost)
+def list_posts(
+    query: Optional[str]= Query(
+        default=None,
+        description="Texto para buscar por título",
+        alias="search",
+        min_length=3,
+        max_length=50,
+        pattern=r"^[\w\sáéíóúÁÉÍÓÚüÜ-]+$"#es para indicar que tipo de caracteres acepta
+    ),
+
+    per_page: int = Query(
+        10, ge=1, le=50,
+        description="Número de resultados (1-50)"
+    ),
+    page: int = Query(
+        1, ge=1,#minimo de la pagina que obvio debe empezar en 1
+        description="Número de página (>=1)"
+    ),
+    order_by: Literal["id", "title"] = Query(
+        "id", description="Campo de orden"
+    ),
+    direction: Literal["asc", "desc"] = Query(
+        "asc", description="Dirección de orden"
+    ) 
+
+
+):
     
+    results = BLOG_STATION
+
+
     if query:
-        return [post for post in BLOG_STATION if query.lower() in  post["station_name"].lower() ]
+        results = [post for post in results if query.lower()
+                   in post["title"].lower()]
+
+    total = len(results)
+    total_pages = ceil(total/per_page) if total > 0 else 0#total de paginas con redondeo
+
+    if total_pages == 0:
+        current_page = 1
+    else:
+        current_page = min(page, total_pages) #escoge el menor de estos dos valores
+
+    results = sorted(
+        results, key=lambda post: post[order_by], reverse=(direction == "desc"))
+
+    if total_pages == 0:
+        items = []
+    else:
+        start = (current_page - 1) * per_page
+        items = results[start: start + per_page]  # [10:20]
+
+    has_prev = current_page > 1 #para indicarnos si hay o no paginas anteriores tna solo retrona true or false
+    has_next = current_page < total_pages if total_pages > 0 else False #para indicarnos si hay o no paginas posteriores tna solo retrona true or false
+
+    return PaginatedPost(
+        page=current_page,
+        per_page=per_page,
+        total=total,
+        total_pages=total_pages,
+        has_prev=has_prev,
+        has_next=has_next,
+        order_by=order_by,
+        direction=direction,
+        search=query,
+        items=items
+    )
         
     
-    return BLOG_STATION
  
  
 @app.get("/station/{post_id}", response_model=Union[StationPublic, StationSummary], response_description="Estacion encontrada")
-def get_post(post_id: int, includelocation:bool = Query(default=True, description="Incluir o no la locacion")):
+def get_post(post_id: int=Path(
+    ...,
+    get=1,
+    title="Id del post",
+    description="debe ser mayor a 0",
+    example=1
+), includelocation:bool = Query(default=True, description="Incluir o no la locacion")):
     for post in BLOG_STATION:
         if post["id"] == post_id:
             if not includelocation:
